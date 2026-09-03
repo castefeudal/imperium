@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# builds
+dist/
+build/
+*.tsbuildinfo
+
+# environment
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+logs/
+
+# os
+.DS_Store
+Thumbs.db
+
+# editors
+.idea/
+.vscode/
+*.swp
+
+# drizzle output
+packages/database/drizzle/meta/
