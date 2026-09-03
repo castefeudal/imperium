@@ -4,6 +4,8 @@ import { claims, evidenceSources, claimEvidence } from "@imperium/database";
 import { and, desc, eq } from "drizzle-orm";
 
 import { csrfOk, requireAuth } from "../plugins/auth-helpers.js";
+import type { EvidenceTier, EvidenceItem } from "@imperium/domain";
+import { TIER_WEIGHTS, evidenceQuality, VERDICT_LABELS_RU } from "@imperium/domain";
 
 const PMDB = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi";
 const PMDB_SUM = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi";
@@ -31,13 +33,13 @@ const evaluateSchema = z.object({
 });
 
 export const registerEvidenceRoutes: FastifyPluginAsync = async (app) => {
-  app.get("/claims", async (request, reply) => {
+  app.get<{ Querystring: { status?: string; domain?: string } }>("/claims", async (request, reply) => {
     const auth = await requireAuth(app, request, reply);
     if (!auth) return;
     const conditions = [eq(claims.workspaceId, auth.workspaceId)];
-    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    const status = request.query.status;
     if (status) conditions.push(eq(claims.status, status));
-    const domain = typeof request.query.domain === "string" ? request.query.domain : undefined;
+    const domain = request.query.domain;
     if (domain) conditions.push(eq(claims.domain, domain));
     const rows = await app.db.select().from(claims).where(and(...conditions)).orderBy(desc(claims.updatedAt)).limit(100);
     return { claims: rows };
@@ -50,7 +52,7 @@ export const registerEvidenceRoutes: FastifyPluginAsync = async (app) => {
     if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });
     const parsed = evaluateSchema.pick({ statement: true, domain: true }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Укажите утверждение и домен", detail: parsed.error.flatten().fieldErrors });
-    const [c] = await app.db.insert(claims).values({
+    const inserted = await app.db.insert(claims).values({
       workspaceId: auth.workspaceId,
       statement: parsed.data.statement,
       domain: parsed.data.domain,
@@ -59,8 +61,9 @@ export const registerEvidenceRoutes: FastifyPluginAsync = async (app) => {
       contradictions: [],
       whatCouldChange: [],
       assumptions: [],
-      createdBy: auth.userId,
     }).returning();
+    const c = inserted[0];
+    if (!c) return reply.code(500).send({ error: "Не удалось создать утверждение" });
     app.audit(auth, { action: "claim.created", entity: "claim", entityId: c.id, detail: { statement: c.statement } });
     return reply.code(201).send(c);
   });
@@ -72,8 +75,8 @@ export const registerEvidenceRoutes: FastifyPluginAsync = async (app) => {
     const rows = await app.db.select().from(claims).where(and(eq(claims.id, id), eq(claims.workspaceId, auth.workspaceId))).limit(1);
     if (!rows[0]) return reply.code(404).send({ error: "Утверждение не найдено" });
     const sources = await app.db.select({ source: evidenceSources, link: claimEvidence })
-      .from(claimEvidence).innerJoin(evidenceSources, eq(evidenceSources.id, claimEvidence.sourceId))
-      .where(eq(claimEvidence.claimId, id)).orderBy(desc(claimEvidence.evidenceQuality));
+      .from(claimEvidence).innerJoin(evidenceSources, eq(evidenceSources.id, claimEvidence.evidenceId))
+      .where(eq(claimEvidence.claimId, id)).orderBy(desc(claimEvidence.weight));
     return { claim: rows[0], sources };
   });
 
@@ -87,107 +90,147 @@ export const registerEvidenceRoutes: FastifyPluginAsync = async (app) => {
 
     const maxSources = Math.min(Number((request.body as { maxSources?: number })?.maxSources ?? 5), 20);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15_000);
+    const timeout = setTimeout(() => controller.abort(), 20_000);
     try {
       const isHealth = claim.domain === "health" || claim.domain === "science";
-      const found: Array<{ title: string; authors: string[]; year: number; url: string; doi: string | null; pmid: string | null; source: "pubmed" | "crossref"; quality: number }> = [];
+      // Raw retrieved records: metadata only — no quality is assigned at retrieval time.
+      // Quality comes exclusively from study design (tier), never from the source adapter.
+      const found: Array<{ title: string; authors: string[]; year: number; url: string; doi: string | null; pmid: string | null; source: "pubmed" | "crossref"; pubTypes: string[]; abstract: string | null }> = [];
 
       const term = claim.statement.slice(0, 200);
       if (isHealth) {
         const es = await fetchJson(`${PMDB}?db=pubmed&term=${encodeURIComponent(term)}&retmode=json&retmax=${maxSources}`, controller.signal) as { esearchresult?: { idlist?: string[] } };
         const ids = (es.esearchresult?.idlist ?? []).slice(0, maxSources);
         if (ids.length > 0) {
-          const su = await fetchJson(`${PMDB_SUM}?db=pubmed&id=${ids.join(",")}&retmode=json`, controller.signal) as { result?: Record<string, PubSummary> };
+          const su = await fetchJson(`${PMDB_SUM}?db=pubmed&id=${ids.join(",")}&retmode=json`, controller.signal) as { result?: Record<string, PubSummary & { pubtype?: Array<{ "#text"?: string }> }> };
           for (const pid of ids) {
             const r = su.result?.[pid];
             if (!r) continue;
             const doi = r.elocationid?.match(/doi:\s*(10\.\S+)/i)?.[1] ?? null;
-            found.push({ title: r.title ?? pid, authors: (r.authors ?? []).map((a) => a.name), year: Number(r.pubdate?.slice(0, 4) ?? 0), url: `https://pubmed.ncbi.nlm.nih.gov/${pid}/`, doi, pmid: pid, source: "pubmed", quality: 0.9 });
+            const pubTypes = (r.pubtype ?? []).map((p) => p["#text"] ?? "").filter(Boolean);
+            found.push({ title: r.title ?? pid, authors: (r.authors ?? []).map((a) => a.name), year: Number(r.pubdate?.slice(0, 4) ?? 0), url: `https://pubmed.ncbi.nlm.nih.gov/${pid}/`, doi, pmid: pid, source: "pubmed", pubTypes, abstract: null });
           }
         }
       }
 
       if (found.length < maxSources) {
-        const cr = await fetchJson(`${CROSSREF}?query=${encodeURIComponent(term)}&rows=${maxSources - found.length}&select=title,author,issued,DOI,URL`, controller.signal) as { message?: { items?: Array<{ title?: string[]; author?: Array<{ given?: string; family?: string }>; issued?: { "date-parts"?: number[][] }; DOI?: string; URL?: string }> } };
+        const cr = await fetchJson(`${CROSSREF}?query=${encodeURIComponent(term)}&rows=${maxSources - found.length}&select=title,author,issued,DOI,URL,type`, controller.signal) as { message?: { items?: Array<{ title?: string[]; author?: Array<{ given?: string; family?: string }>; issued?: { "date-parts"?: number[][] }; DOI?: string; URL?: string; type?: string }> } };
         for (const it of cr.message?.items ?? []) {
           if (found.length >= maxSources) break;
-          found.push({ title: it.title?.[0] ?? it.DOI ?? "Без названия", authors: (it.author ?? []).map((a) => [a.given, a.family].filter(Boolean).join(" ")).filter(Boolean), year: it.issued?.["date-parts"]?.[0]?.[0] ?? 0, url: it.URL ?? `https://doi.org/${it.DOI}`, doi: it.DOI ?? null, pmid: null, source: "crossref", quality: 0.6 });
+          found.push({ title: it.title?.[0] ?? it.DOI ?? "Без названия", authors: (it.author ?? []).map((a) => [a.given, a.family].filter(Boolean).join(" ")).filter(Boolean), year: it.issued?.["date-parts"]?.[0]?.[0] ?? 0, url: it.URL ?? `https://doi.org/${it.DOI}`, doi: it.DOI ?? null, pmid: null, source: "crossref", pubTypes: it.type ? [it.type] : [], abstract: null });
         }
       }
 
-      if (found.length === 0) {
-        await app.db.update(claims).set({ status: "inconclusive", verdict: "Источник сейчас недоступен", updatedAt: new Date() }).where(eq(claims.id, id));
-        return reply.code(503).send({ claimId: id, status: "inconclusive", verdict: "Источник сейчас недоступен", sources: [] });
+      // Дедупликация: один и тот же источник из разных адаптеров — не независимые доказательства.
+      const seen = new Set<string>();
+      const deduped = found.filter((f) => {
+        const key = f.doi?.toLowerCase() ?? f.pmid ?? `${f.title.toLowerCase().replace(/[^a-zа-я0-9]/g, "")}:${f.year}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      // Классификация дизайна исследования по типам публикации (не по источнику, не только по заголовку).
+      const classify = (pubTypes: string[], title: string): EvidenceTier => {
+        const t = pubTypes.join(" ").toLowerCase();
+        if (/systematic review/.test(t)) return "systematic_review";
+        if (/meta-?analysis/.test(t)) return "meta_analysis";
+        if (/randomized controlled trial|randomised controlled/.test(t)) return "rct";
+        if (/clinical trial(?!.*(randomized|randomised))/.test(t) && /phase/.test(t)) return "rct";
+        if (/cohort study/.test(t)) return "prospective_cohort";
+        if (/observational stud|cross-?sectional|case-?control/.test(t)) return "observational";
+        if (/case report/.test(t)) return "case_report";
+        if (/in vitro|in vivo|mechanis/.test(t)) return "mechanistic";
+        if (/practice guideline|guideline/.test(t)) return "expert_opinion";
+        if (/editorial|comment|letter|news/.test(t)) return "expert_opinion";
+        // Метаданных недостаточно — честный unknown вместо ложной уверенности.
+        return "unknown";
+      };
+
+      const items: EvidenceItem[] = deduped.map((f) => ({
+        tier: classify(f.pubTypes, f.title),
+        // Мета-данные (заголовок/тип публикации) сами по себе не говорят о направлении
+        // результата — честная позиция "неизвестно" до анализа содержания.
+        supports: false,
+        inconclusive: true,
+        year: f.year || null,
+      }));
+
+      const n = items.length;
+      const quality = evidenceQuality(items.map((i) => ({ ...i, supports: true })));
+      const confidence = n === 0 ? "insufficient_data" : quality >= 0.75 ? "high" : quality >= 0.5 ? "moderate" : quality > 0.15 ? "low" : "insufficient_data";
+
+      const counts: Record<"systematic" | "rct" | "cohort" | "other", number> = { systematic: 0, rct: 0, cohort: 0, other: 0 };
+      for (const i of items) {
+        if (i.tier === "systematic_review" || i.tier === "meta_analysis") counts.systematic++;
+        else if (i.tier === "rct") counts.rct++;
+        else if (i.tier === "prospective_cohort" || i.tier === "observational") counts.cohort++;
+        else counts.other++;
       }
 
-      const sorted = found.sort((a, b) => b.quality - a.quality);
-      const strongest = sorted[0];
-      const contradicting = sorted.filter((s) => s.source !== strongest.source);
-      const n = sorted.length;
-      const rct = sorted.some((s) => /randomized|trial/i.test(s.title));
-      const systematic = sorted.some((s) => /systematic|meta-analysis/i.test(s.title));
-      const quality = systematic ? 0.9 : rct ? 0.75 : n >= 3 ? 0.6 : n === 2 ? 0.45 : 0.3;
-      const confidence = quality >= 0.75 ? "высокая" : quality >= 0.45 ? "умеренная" : "низкая";
-      const verdict = n === 0 ? "Недостаточно данных"
-        : contradicting.length === 0 ? "Скорее подтверждается"
-        : strongest.quality - (contradicting[0]?.quality ?? 0) < 0.15 ? "Противоречиво"
-        : "Скорее подтверждается";
+      // Верификация содержимого требует анализа результатов исследований (абстракты/полные тексты).
+      // Только по метаданным корректный вердикт — "недостаточно данных" с прозрачным списком найденного.
+      const verdict = n === 0 ? "insufficient_data" : "insufficient_data";
+      const limitations: string[] = [
+        "найдены метаданные публикаций, но не их результаты: направление эффекта не оценивалось",
+        ...(counts.systematic === 0 ? ["систематический обзор/мета-анализ по теме не найден"] : []),
+        ...(counts.rct === 0 ? ["рандомизированное исследование не найдено"] : []),
+        ...(n < 3 ? [`найдено мало независимых источников: ${n}`] : []),
+        "внешние индексы (PubMed/Crossref) могли быть частично недоступны",
+      ];
+      const whatCouldChange = [
+        "анализ абстрактов/полных текстов найденных публикаций",
+        ...(counts.systematic === 0 ? ["появление систематического обзора по теме"] : []),
+        "новое крупное РКИ с результатами по теме",
+      ];
 
-      const inserted = sorted.map((s) => ({
-        sourceId: null as string | null,
-        external: { source: s.source, title: s.title, authors: s.authors, year: s.year, url: s.url, doi: s.doi, pmid: s.pmid },
-        quality: s.quality,
-      }));
+      if (n === 0) {
+        await app.db.update(claims).set({ status: "inconclusive", verdict: "Источники не найдены", confidence: 0, evidenceQuality: 0, updatedAt: new Date() }).where(eq(claims.id, id));
+        return reply.code(503).send({ claimId: id, status: "inconclusive", verdict: "insufficient_data", sources: [] });
+      }
+
       const rows = await app.db.insert(evidenceSources).values(
-        inserted.map((e) => ({
+        deduped.map((f) => ({
           workspaceId: auth.workspaceId,
-          claimId: id,
-          kind: e.external.source,
-          title: e.external.title,
-          authors: e.external.authors,
-          year: e.external.year,
-          url: e.external.url,
-          doi: e.external.doi,
-          pmid: e.external.pmid,
-          quality: e.quality,
+          kind: f.source,
+          title: f.title,
+          authors: f.authors,
+          year: f.year || null,
+          url: f.url,
+          doi: f.doi,
+          pmid: f.pmid,
+          tier: classify(f.pubTypes, f.title),
+          metadata: { pubTypes: f.pubTypes, retrievedFor: claim.statement.slice(0, 200) },
         })),
       ).returning();
 
-      const links = rows.map((r, i) => ({ claimId: id, sourceId: r.id, evidenceQuality: sorted[i]?.quality ?? 0.5 }));
+      const links = rows.map((r) => ({ claimId: id, evidenceId: r.id, stance: "neutral", weight: TIER_WEIGHTS[r.tier as EvidenceTier] ?? 0.1 }));
       await app.db.insert(claimEvidence).values(links);
 
       await app.db.update(claims).set({
-        status: "partially_verified",
+        status: "inconclusive",
         verdict,
         confidence: quality,
         evidenceQuality: quality,
-        limitations: [
-          ...(systematic ? [] : ["систематический обзор не найден"]),
-          ...(rct ? [] : ["рандомизированное исследование не найдено"]),
-          ...(n < 3 ? [`найдено мало источников: ${n}`] : []),
-          "внешние индексы (PubMed/Crossref) могли быть частично недоступны",
-        ],
-        contradictions: contradicting.map((c) => `${c.source}: ${c.title} (${c.year})`),
-        whatCouldChange: [
-          "появление систематического обзора по теме",
-          "новое РКИ с противоположным результатом",
-          "рост числа независимых источников до 3+",
-        ],
-        assumptions: ["источники релевантны формулировке утверждения", "качество источников оценено корректно"],
+        limitations,
+        contradictions: [],
+        whatCouldChange,
+        assumptions: ["источники релевантны формулировке утверждения"],
         updatedAt: new Date(),
       }).where(eq(claims.id, id));
 
       app.audit(auth, { action: "claim.evaluated", entity: "claim", entityId: id, detail: { verdict, confidence, sources: n } });
       return {
         claimId: id,
-        status: "partially_verified",
+        status: "inconclusive",
         verdict,
         confidence,
         evidenceQuality: quality,
-        strongest: { source: strongest.source, title: strongest.title, year: strongest.year, url: strongest.url },
-        contradicting: contradicting.map((c) => ({ source: c.source, title: c.title, year: c.year })),
-        sources: rows.map((r) => ({ id: r.id, kind: r.kind, title: r.title, url: r.url, quality: r.quality })),
+        strongest: deduped[0] ? { source: deduped[0].source, title: deduped[0].title, year: deduped[0].year, url: deduped[0].url } : null,
+        studyDesigns: Object.fromEntries(Object.entries(counts).filter(([, v]) => v > 0)),
+        sources: rows.map((r) => ({ id: r.id, kind: r.kind, title: r.title, url: r.url, tier: r.tier })),
         sourcesCount: n,
+        limitations,
       };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

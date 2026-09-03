@@ -3,7 +3,7 @@ import { and, desc, eq, isNull, SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { PgTable, PgColumn } from "drizzle-orm/pg-core";
 import { getTableColumns } from "drizzle-orm";
-import { csrfOk } from "../plugins/auth-helpers.js";
+import { csrfOk, requireAuth } from "../plugins/auth-helpers.js";
 
 export interface CrudConfig {
   table: PgTable;
@@ -23,7 +23,7 @@ export function crudRoutes(cfg: CrudConfig): FastifyPluginAsync {
     const cols = getTableColumns(cfg.table) as unknown as Cols;
 
     app.get("/", async (request, reply) => {
-      const auth = await app.requireAuth(request, reply);
+      const auth = await requireAuth(app, request, reply);
       if (!auth) return;
       const conditions: SQL[] = [eq(cfg.workspaceColumn, auth.workspaceId)];
       if (cfg.softDeleteColumn) conditions.push(isNull(cfg.softDeleteColumn) as SQL);
@@ -37,7 +37,7 @@ export function crudRoutes(cfg: CrudConfig): FastifyPluginAsync {
     });
 
     app.post("/", async (request, reply) => {
-      const auth = await app.requireAuth(request, reply);
+      const auth = await requireAuth(app, request, reply);
       if (!auth) return;
       if (auth.role === "viewer") return reply.code(403).send({ error: "Наблюдатель не может создавать записи" });
       if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });
@@ -48,7 +48,7 @@ export function crudRoutes(cfg: CrudConfig): FastifyPluginAsync {
     });
 
     app.get("/:id", async (request, reply) => {
-      const auth = await app.requireAuth(request, reply);
+      const auth = await requireAuth(app, request, reply);
       if (!auth) return;
       const rows = await app.db.select().from(cfg.table)
         .where(and(eq(cfg.idColumn, (request.params as { id: string }).id), eq(cfg.workspaceColumn, auth.workspaceId)))
@@ -58,7 +58,7 @@ export function crudRoutes(cfg: CrudConfig): FastifyPluginAsync {
     });
 
     app.patch("/:id", async (request, reply) => {
-      const auth = await app.requireAuth(request, reply);
+      const auth = await requireAuth(app, request, reply);
       if (!auth) return;
       if (auth.role === "viewer") return reply.code(403).send({ error: "Наблюдатель не может изменять записи" });
       if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });
@@ -73,7 +73,7 @@ export function crudRoutes(cfg: CrudConfig): FastifyPluginAsync {
     });
 
     app.delete("/:id", async (request, reply) => {
-      const auth = await app.requireAuth(request, reply);
+      const auth = await requireAuth(app, request, reply);
       if (!auth) return;
       if (!["owner", "admin"].includes(auth.role)) return reply.code(403).send({ error: "Недостаточно прав для удаления" });
       if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });

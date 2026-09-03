@@ -38,8 +38,8 @@ export function isTerminal(s: MissionStatus): boolean {
   return MISSION_STATUSES.indexOf(s) >= MISSION_STATUSES.indexOf("completed") && canTransition(s, "completed") === false && s !== "failed";
 }
 
-export type Verdict = "PASS" | "PARTIAL" | "FAIL";
-export function aggregateVerdicts(vs: Verdict[]): Verdict {
+export type StepVerdict = "PASS" | "PARTIAL" | "FAIL";
+export function aggregateVerdicts(vs: StepVerdict[]): StepVerdict {
   if (vs.length === 0) return "FAIL";
   if (vs.every((v) => v === "PASS")) return "PASS";
   if (vs.some((v) => v === "PASS") || vs.some((v) => v === "PARTIAL")) return "PARTIAL";

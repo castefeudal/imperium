@@ -44,11 +44,18 @@ import type { FastifyReply, FastifyInstance } from "fastify";
 
 /** App-first guard: replies 401 and returns null when unauthenticated. */
 export async function requireAuth(
-  app: FastifyInstance,
-  request: FastifyRequest,
-  reply: FastifyReply,
+  a: FastifyInstance | FastifyRequest,
+  b: FastifyRequest | FastifyReply,
+  c?: FastifyReply,
 ): Promise<AuthContext | null> {
+  // Supports direct calls requireAuth(app, request, reply)
+  // and Fastify preHandler usage { preHandler: [app.requireAuth] } via a bound wrapper set in index.ts.
+  const direct = "db" in a;
+  const app = (direct ? a : (a as unknown as { requireAuthApp?: FastifyInstance }).requireAuthApp)! as FastifyInstance;
+  const request = (direct ? b : a) as FastifyRequest;
+  const reply = (direct ? c! : b) as FastifyReply;
   const auth = await getAuth(request, app.db);
+  request.auth = auth ?? undefined;
   if (!auth) {
     reply.code(401).send({ error: "Требуется вход в систему" });
     return null;

@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { goals, areas, projects, tasks } from "@imperium/database";
 import { and, desc, eq, isNull } from "drizzle-orm";
+import { requireAuth } from "../plugins/auth-helpers.js";
 
 const createSchema = z.object({
   title: z.string().min(1).max(300),
@@ -21,7 +22,7 @@ const updateSchema = createSchema.partial();
 
 export const registerGoalsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (request, reply) => {
-    const auth = await app.requireAuth(request, reply);
+    const auth = await requireAuth(app, request, reply);
     if (!auth) return;
     const rows = await app.db.select().from(goals)
       .where(and(eq(goals.workspaceId, auth.workspaceId), isNull(goals.deletedAt)))
@@ -36,7 +37,7 @@ export const registerGoalsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/", async (request, reply) => {
-    const auth = await app.requireAuth(request, reply);
+    const auth = await requireAuth(app, request, reply);
     if (!auth) return;
     if (auth.role === "viewer") return reply.code(403).send({ error: "Наблюдатель не может создавать цели" });
     const parsed = createSchema.safeParse(request.body);
@@ -51,7 +52,7 @@ export const registerGoalsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/:id", async (request, reply) => {
-    const auth = await app.requireAuth(request, reply);
+    const auth = await requireAuth(app, request, reply);
     if (!auth) return;
     const rows = await app.db.select().from(goals)
       .where(and(eq(goals.id, (request.params as { id: string }).id), eq(goals.workspaceId, auth.workspaceId), isNull(goals.deletedAt))).limit(1);
@@ -61,7 +62,7 @@ export const registerGoalsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/:id", async (request, reply) => {
-    const auth = await app.requireAuth(request, reply);
+    const auth = await requireAuth(app, request, reply);
     if (!auth) return;
     if (auth.role === "viewer") return reply.code(403).send({ error: "Наблюдатель не может изменять цели" });
     const parsed = updateSchema.safeParse(request.body);
@@ -76,7 +77,7 @@ export const registerGoalsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.delete("/:id", async (request, reply) => {
-    const auth = await app.requireAuth(request, reply);
+    const auth = await requireAuth(app, request, reply);
     if (!auth) return;
     if (!["owner", "admin"].includes(auth.role)) return reply.code(403).send({ error: "Недостаточно прав" });
     const [row] = await app.db.update(goals).set({ deletedAt: new Date() })

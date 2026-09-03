@@ -5,7 +5,7 @@ import {
   sleepEntries, recoveryEntries, labResults, symptoms, interventions,
 } from "@imperium/database";
 import { and, desc, eq, gte } from "drizzle-orm";
-import { csrfOk } from "../plugins/auth-helpers.js";
+import { csrfOk, requireAuth } from "../plugins/auth-helpers.js";
 
 const SENSITIVE_NOTE = "Данные здоровья конфиденциальны и не попадают в AI-контекст без явного запроса.";
 
@@ -18,14 +18,14 @@ export const registerHealthRoutes: FastifyPluginAsync = async (app) => {
   type Row = Record<string, unknown>;
   const sub = <T extends Row>(table: Parameters<typeof app.db.select>[0] extends never ? never : any, days: number) => ({
     list: async (request: any, reply: any) => {
-      const auth = await app.requireAuth(request, reply);
+      const auth = await requireAuth(app, request, reply);
       if (!auth) return;
       return app.db.select().from(table)
         .where(and(eq(table.workspaceId, auth.workspaceId), gte(table.recordedAt ?? table.createdAt ?? table.id, dateRange(days))))
         .orderBy(desc(table.recordedAt ?? table.createdAt ?? table.id)).limit(200);
     },
     create: async (request: any, reply: any) => {
-      const auth = await app.requireAuth(request, reply);
+      const auth = await requireAuth(app, request, reply);
       if (!auth) return;
       if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });
       const [row] = await app.db.insert(table).values({ ...(request.body as Row), workspaceId: auth.workspaceId }).returning();
@@ -52,7 +52,7 @@ export const registerHealthRoutes: FastifyPluginAsync = async (app) => {
 
   // Сводка для Today: последние значения ключевых метрик.
   app.get("/overview", async (request, reply) => {
-    const auth = await app.requireAuth(request, reply);
+    const auth = await requireAuth(app, request, reply);
     if (!auth) return;
     const since = dateRange(30);
     const [sleep, weight, training] = await Promise.all([

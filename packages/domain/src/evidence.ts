@@ -40,9 +40,14 @@ export const CONFIDENCE_LABELS_RU: Record<Confidence, string> = {
   insufficient_data: "Недостаточно данных",
 };
 
+export type Stance = "supports" | "contradicts" | "neutral" | "unclear";
+
 export interface EvidenceItem {
   tier: EvidenceTier;
-  supports: boolean;      // does it support the claim?
+  /** Направление результата источника относительно утверждения. */
+  stance?: Stance;
+  /** Backward-compatible boolean: true = supports, false = contradicts. */
+  supports?: boolean;
   sampleSize?: number | null;
   year?: number | null;
   retracted?: boolean;
@@ -75,13 +80,23 @@ export function synthesizeVerdict(items: EvidenceItem[]): { verdict: Verdict; co
   if (items.length === 0) {
     return { verdict: "insufficient_data", confidence: "insufficient_data", rationale: ["нет источников"] };
   }
-  const supporting = items.filter((i) => i.supports && !i.retracted);
-  const opposing = items.filter((i) => !i.supports && !i.retracted);
+  const stanceOf = (i: EvidenceItem): "supports" | "contradicts" | "unclear" => {
+    if (i.stance) return i.stance === "neutral" || i.stance === "unclear" ? "unclear" : i.stance;
+    if (i.supports === true) return "supports";
+    if (i.supports === false) return "contradicts";
+    return "unclear";
+  };
+  const supporting = items.filter((i) => stanceOf(i) === "supports" && !i.retracted);
+  const opposing = items.filter((i) => stanceOf(i) === "contradicts" && !i.retracted);
+  const unclear = items.filter((i) => stanceOf(i) === "unclear" && !i.retracted);
   const q = evidenceQuality(items);
   const rationale: string[] = [];
 
   let verdict: Verdict;
   if (supporting.length === 0 && opposing.length === 0) {
+    if (unclear.length > 0) {
+      return { verdict: "insufficient_data", confidence: "insufficient_data", rationale: ["направление результатов источников не определено (только метаданные)"] };
+    }
     return { verdict: "insufficient_data", confidence: "insufficient_data", rationale: ["все источники отозваны или непригодны"] };
   }
   const sQ = evidenceQuality(supporting);

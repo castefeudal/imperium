@@ -3,7 +3,8 @@ import { z } from "zod";
 import { missions, missionSteps, agentRuns, toolCalls, approvals, costLedger, projects } from "@imperium/database";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
-import { csrfOk } from "../plugins/auth-helpers.js";
+import { requireAuth, csrfOk } from "../plugins/auth-helpers.js";
+import type { MissionStatus } from "@imperium/domain";
 import { canTransition } from "@imperium/domain";
 
 const createSchema = z.object({
@@ -22,10 +23,10 @@ const updateSchema = createSchema.partial().extend({
 });
 
 export const registerMissionsRoutes: FastifyPluginAsync = async (app) => {
-  app.get("/", async (request, reply) => {
+  app.get<{ Querystring: { status?: string } }>("/", async (request, reply) => {
     const auth = await requireAuth(app, request, reply);
     if (!auth) return;
-    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    const status = request.query.status;
     const conditions = [eq(missions.workspaceId, auth.workspaceId)];
     if (status) conditions.push(eq(missions.status, status));
     const rows = await app.db.select().from(missions).where(and(...conditions)).orderBy(desc(missions.createdAt)).limit(100);
@@ -57,6 +58,7 @@ export const registerMissionsRoutes: FastifyPluginAsync = async (app) => {
       createdBy: auth.userId,
       status: "draft",
     }).returning();
+    if (!m) return reply.code(500).send({ error: "Не удалось создать миссию" });
     app.audit(auth, { action: "mission.created", entity: "mission", entityId: m.id, detail: { title: m.title } });
     return reply.code(201).send(m);
   });
@@ -67,12 +69,12 @@ export const registerMissionsRoutes: FastifyPluginAsync = async (app) => {
     const id = (request.params as { id: string }).id;
     const rows = await app.db.select().from(missions).where(and(eq(missions.id, id), eq(missions.workspaceId, auth.workspaceId))).limit(1);
     if (!rows[0]) return reply.code(404).send({ error: "Миссия не найдена" });
-    const steps = await app.db.select().from(missionSteps).where(eq(missionSteps.missionId, id)).orderBy(missionSteps.createdAt);
-    const runs = await app.db.select().from(agentRuns).where(eq(agentRuns.missionId, id)).orderBy(desc(agentRuns.createdAt));
+    const steps = await app.db.select().from(missionSteps).where(eq(missionSteps.missionId, id)).orderBy(missionSteps.startedAt);
+    const runs = await app.db.select().from(agentRuns).where(eq(agentRuns.missionId, id)).orderBy(desc(agentRuns.startedAt));
     const calls = await app.db.select().from(toolCalls).where(eq(toolCalls.missionId, id)).orderBy(desc(toolCalls.createdAt)).limit(50);
     const pending = await app.db.select().from(approvals).where(and(eq(approvals.missionId, id), eq(approvals.status, "pending")));
     const costs = await app.db.select().from(costLedger).where(eq(costLedger.missionId, id));
-    const costUsd = costs.reduce((s, c) => s + (c.estimatedCostUsd ?? 0), 0);
+    const costUsd = costs.reduce((s, c) => s + Number(c.estCostUsd ?? 0), 0);
     return { mission: rows[0], steps, runs, toolCalls: calls, pendingApprovals: pending, costUsd };
   });
 
@@ -87,7 +89,7 @@ export const registerMissionsRoutes: FastifyPluginAsync = async (app) => {
     const parsed = updateSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Проверьте данные", detail: parsed.error.flatten().fieldErrors });
     const { status, ...fields } = parsed.data;
-    if (status && status !== current.status && !canTransition(current.status, status)) {
+    if (status && status !== current.status && !canTransition(current.status as MissionStatus, status)) {
       return reply.code(409).send({ error: `Недопустимый переход статуса: ${current.status} → ${status}` });
     }
     const patch: Record<string, unknown> = { ...fields };
@@ -108,7 +110,7 @@ export const registerMissionsRoutes: FastifyPluginAsync = async (app) => {
     const id = (request.params as { id: string }).id;
     const current = (await app.db.select().from(missions).where(and(eq(missions.id, id), eq(missions.workspaceId, auth.workspaceId))).limit(1))[0];
     if (!current) return reply.code(404).send({ error: "Миссия не найдена" });
-    if (!canTransition(current.status, "cancelled")) return reply.code(409).send({ error: `Миссия в статусе ${current.status} не может быть отменена` });
+    if (!canTransition(current.status as MissionStatus, "cancelled")) return reply.code(409).send({ error: `Миссия в статусе ${current.status} не может быть отменена` });
     const [m] = await app.db.update(missions).set({ status: "cancelled" }).where(eq(missions.id, id)).returning();
     await app.db.update(missionSteps).set({ status: "cancelled" }).where(and(eq(missionSteps.missionId, id), inArray(missionSteps.status, ["pending", "running", "awaiting_approval"])));
     app.audit(auth, { action: "mission.cancelled", entity: "mission", entityId: id });
@@ -130,9 +132,11 @@ export const registerMissionsRoutes: FastifyPluginAsync = async (app) => {
       await app.db.update(approvals).set({ status: "expired" }).where(eq(approvals.id, approvalId));
       return reply.code(410).send({ error: "Срок подтверждения истёк — запросите действие заново" });
     }
-    const decision = body.data.decision === "reject" ? "rejected" : "approved";
+    const decision = body.data.decision === "reject" ? "rejected"
+      : body.data.decision === "allow_mission" ? "approved_for_mission"
+      : "approved_once";
     const [a] = await app.db.update(approvals).set({ status: decision, decidedBy: auth.userId, decidedAt: new Date() }).where(eq(approvals.id, approvalId)).returning();
-    app.audit(auth, { action: `approval.${decision}`, entity: "approval", entityId: approvalId, detail: { tool: approval.toolName, missionId: id } });
+    app.audit(auth, { action: `approval.${decision}`, entity: "approval", entityId: approvalId, detail: { approval: approval.title, kind: approval.kind, missionId: id } });
     return a;
   });
 };

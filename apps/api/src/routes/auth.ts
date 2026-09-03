@@ -3,7 +3,7 @@ import { z } from "zod";
 import { users } from "@imperium/database";
 import { eq } from "drizzle-orm";
 import { hashPassword, verifyPassword, createSession, ensureDefaultWorkspace, audit, sessionCookieOptions, SESSION_COOKIE } from "../plugins/auth-core.js";
-import { getAuth } from "../plugins/auth-helpers.js";
+import { getAuth, requireAuth } from "../plugins/auth-helpers.js";
 
 const registerSchema = z.object({
   email: z.string().email().max(200),
@@ -60,7 +60,7 @@ export const registerAuthRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/me", async (request, reply) => {
-    const auth = await app.requireAuth(request, reply);
+    const auth = await requireAuth(app, request, reply);
     if (!auth) return;
     const rows = await app.db.select({ id: users.id, email: users.email, displayName: users.displayName, locale: users.locale, timezone: users.timezone })
       .from(users).where(eq(users.id, auth.userId)).limit(1);

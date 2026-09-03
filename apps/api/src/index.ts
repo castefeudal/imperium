@@ -4,8 +4,11 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import helmet from "@fastify/helmet";
 import { getDb } from "./plugins/db.js";
+import { registerAudit } from "./plugins/audit.js";
+import { requireAuth } from "./plugins/auth-helpers.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerWorkspacesRoutes } from "./routes/workspaces.js";
+import { registerNotesRoutes } from "./routes/notes.js";
 import { registerGoalsRoutes } from "./routes/goals.js";
 import { registerProjectsRoutes } from "./routes/projects.js";
 import { registerTasksRoutes } from "./routes/tasks.js";
@@ -31,6 +34,9 @@ declare module "fastify" {
     db: ReturnType<typeof getDb>;
     requireAuth(request: import("fastify").FastifyRequest, reply: import("fastify").FastifyReply): Promise<import("./plugins/auth-helpers.js").AuthContext | null>;
   }
+  interface FastifyRequest {
+    auth?: import("./plugins/auth-helpers.js").AuthContext;
+  }
 }
 
 export async function buildApp(opts: { logger?: boolean } = {}) {
@@ -50,15 +56,10 @@ export async function buildApp(opts: { logger?: boolean } = {}) {
 
   app.db = getDb();
 
-  app.requireAuth = async (request, reply) => {
-    const { getAuth } = await import("./plugins/auth-helpers.js");
-    const auth = await getAuth(request, app.db);
-    if (!auth) {
-      reply.code(401).send({ error: "Требуется вход в систему" });
-      return null;
-    }
-    return auth;
-  };
+  registerAudit(app);
+
+  app.requireAuth = ((request: import("fastify").FastifyRequest, reply: import("fastify").FastifyReply) =>
+    requireAuth(app, request, reply)) as typeof app.requireAuth;
 
   app.get("/health", async () => ({ status: "ok", time: new Date().toISOString() }));
   app.get("/ready", async (_req, reply) => {
@@ -72,6 +73,7 @@ export async function buildApp(opts: { logger?: boolean } = {}) {
 
   await app.register(registerAuthRoutes, { prefix: "/api/v1/auth" });
   await app.register(registerWorkspacesRoutes, { prefix: "/api/v1/workspaces" });
+  await app.register(registerNotesRoutes, { prefix: "/api/v1/notes" });
   await app.register(registerGoalsRoutes, { prefix: "/api/v1/goals" });
   await app.register(registerProjectsRoutes, { prefix: "/api/v1/projects" });
   await app.register(registerTasksRoutes, { prefix: "/api/v1/tasks" });
