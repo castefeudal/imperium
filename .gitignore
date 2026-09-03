@@ -1,29 +1,16 @@
-# dependencies
 node_modules/
-.pnpm-store/
-
-# builds
 dist/
 build/
-*.tsbuildinfo
-
-# environment
-.env
-.env.local
-.env.*.local
-
-# logs
+coverage/
 *.log
-logs/
-
-# os
+.env
+.env.*
+!.env.example
 .DS_Store
-Thumbs.db
-
-# editors
-.idea/
-.vscode/
-*.swp
-
-# drizzle output
-packages/database/drizzle/meta/
+.turbo/
+*.tsbuildinfo
+playwright-report/
+test-results/
+data/*.db
+data/*.sqlite
+minio_data/
