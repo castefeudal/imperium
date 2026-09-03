@@ -1,0 +1,138 @@
+import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
+import { missions, missionSteps, agentRuns, toolCalls, approvals, costLedger, projects } from "@imperium/database";
+import { and, desc, eq, inArray } from "drizzle-orm";
+
+import { csrfOk } from "../plugins/auth-helpers.js";
+import { canTransition } from "@imperium/domain";
+
+const createSchema = z.object({
+  title: z.string().min(1).max(200),
+  objective: z.string().min(1).max(5000),
+  projectId: z.string().uuid().nullable().optional(),
+  priority: z.number().int().min(1).max(5).optional(),
+  maxSteps: z.number().int().min(1).max(200).optional(),
+  deadline: z.string().datetime().nullable().optional(),
+  allowedTools: z.array(z.string().max(100)).optional(),
+  context: z.record(z.unknown()).optional(),
+});
+
+const updateSchema = createSchema.partial().extend({
+  status: z.enum(["draft", "planning", "awaiting_approval", "queued", "running", "blocked", "reviewing", "completed", "failed", "cancelled"]).optional(),
+});
+
+export const registerMissionsRoutes: FastifyPluginAsync = async (app) => {
+  app.get("/", async (request, reply) => {
+    const auth = await requireAuth(app, request, reply);
+    if (!auth) return;
+    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    const conditions = [eq(missions.workspaceId, auth.workspaceId)];
+    if (status) conditions.push(eq(missions.status, status));
+    const rows = await app.db.select().from(missions).where(and(...conditions)).orderBy(desc(missions.createdAt)).limit(100);
+    return { missions: rows };
+  });
+
+  app.post("/", async (request, reply) => {
+    const auth = await requireAuth(app, request, reply);
+    if (!auth) return;
+    if (auth.role === "viewer") return reply.code(403).send({ error: "Наблюдатель не может создавать миссии" });
+    if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });
+    const parsed = createSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Проверьте данные миссии", detail: parsed.error.flatten().fieldErrors });
+    const d = parsed.data;
+    if (d.projectId) {
+      const p = await app.db.select({ id: projects.id }).from(projects).where(and(eq(projects.id, d.projectId), eq(projects.workspaceId, auth.workspaceId))).limit(1);
+      if (!p[0]) return reply.code(400).send({ error: "Проект не найден в этом рабочем пространстве" });
+    }
+    const [m] = await app.db.insert(missions).values({
+      workspaceId: auth.workspaceId,
+      title: d.title,
+      objective: d.objective,
+      projectId: d.projectId ?? null,
+      priority: d.priority ?? 3,
+      maxSteps: d.maxSteps ?? 50,
+      deadline: d.deadline ? new Date(d.deadline) : null,
+      allowedTools: d.allowedTools ?? [],
+      context: d.context ?? {},
+      createdBy: auth.userId,
+      status: "draft",
+    }).returning();
+    app.audit(auth, { action: "mission.created", entity: "mission", entityId: m.id, detail: { title: m.title } });
+    return reply.code(201).send(m);
+  });
+
+  app.get("/:id", async (request, reply) => {
+    const auth = await requireAuth(app, request, reply);
+    if (!auth) return;
+    const id = (request.params as { id: string }).id;
+    const rows = await app.db.select().from(missions).where(and(eq(missions.id, id), eq(missions.workspaceId, auth.workspaceId))).limit(1);
+    if (!rows[0]) return reply.code(404).send({ error: "Миссия не найдена" });
+    const steps = await app.db.select().from(missionSteps).where(eq(missionSteps.missionId, id)).orderBy(missionSteps.createdAt);
+    const runs = await app.db.select().from(agentRuns).where(eq(agentRuns.missionId, id)).orderBy(desc(agentRuns.createdAt));
+    const calls = await app.db.select().from(toolCalls).where(eq(toolCalls.missionId, id)).orderBy(desc(toolCalls.createdAt)).limit(50);
+    const pending = await app.db.select().from(approvals).where(and(eq(approvals.missionId, id), eq(approvals.status, "pending")));
+    const costs = await app.db.select().from(costLedger).where(eq(costLedger.missionId, id));
+    const costUsd = costs.reduce((s, c) => s + (c.estimatedCostUsd ?? 0), 0);
+    return { mission: rows[0], steps, runs, toolCalls: calls, pendingApprovals: pending, costUsd };
+  });
+
+  app.patch("/:id", async (request, reply) => {
+    const auth = await requireAuth(app, request, reply);
+    if (!auth) return;
+    if (auth.role === "viewer") return reply.code(403).send({ error: "Наблюдатель не может изменять миссии" });
+    if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });
+    const id = (request.params as { id: string }).id;
+    const current = (await app.db.select().from(missions).where(and(eq(missions.id, id), eq(missions.workspaceId, auth.workspaceId))).limit(1))[0];
+    if (!current) return reply.code(404).send({ error: "Миссия не найдена" });
+    const parsed = updateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Проверьте данные", detail: parsed.error.flatten().fieldErrors });
+    const { status, ...fields } = parsed.data;
+    if (status && status !== current.status && !canTransition(current.status, status)) {
+      return reply.code(409).send({ error: `Недопустимый переход статуса: ${current.status} → ${status}` });
+    }
+    const patch: Record<string, unknown> = { ...fields };
+    if (status) {
+      patch.status = status;
+      if (status === "completed") patch.completedAt = new Date();
+      if (status === "running" && !current.startedAt) patch.startedAt = new Date();
+    }
+    const [m] = await app.db.update(missions).set(patch).where(eq(missions.id, id)).returning();
+    app.audit(auth, { action: "mission.updated", entity: "mission", entityId: id, diff: { from: { status: current.status }, to: { status: status ?? current.status } } });
+    return m;
+  });
+
+  app.post("/:id/cancel", async (request, reply) => {
+    const auth = await requireAuth(app, request, reply);
+    if (!auth) return;
+    if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });
+    const id = (request.params as { id: string }).id;
+    const current = (await app.db.select().from(missions).where(and(eq(missions.id, id), eq(missions.workspaceId, auth.workspaceId))).limit(1))[0];
+    if (!current) return reply.code(404).send({ error: "Миссия не найдена" });
+    if (!canTransition(current.status, "cancelled")) return reply.code(409).send({ error: `Миссия в статусе ${current.status} не может быть отменена` });
+    const [m] = await app.db.update(missions).set({ status: "cancelled" }).where(eq(missions.id, id)).returning();
+    await app.db.update(missionSteps).set({ status: "cancelled" }).where(and(eq(missionSteps.missionId, id), inArray(missionSteps.status, ["pending", "running", "awaiting_approval"])));
+    app.audit(auth, { action: "mission.cancelled", entity: "mission", entityId: id });
+    return m;
+  });
+
+  app.post("/:id/approve/:approvalId", async (request, reply) => {
+    const auth = await requireAuth(app, request, reply);
+    if (!auth) return;
+    if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });
+    const { id, approvalId } = request.params as { id: string; approvalId: string };
+    const body = z.object({ decision: z.enum(["allow_once", "allow_mission", "reject"]) }).safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "Укажите решение: allow_once, allow_mission или reject" });
+    const rows = await app.db.select().from(approvals).where(and(eq(approvals.id, approvalId), eq(approvals.missionId, id), eq(approvals.workspaceId, auth.workspaceId))).limit(1);
+    const approval = rows[0];
+    if (!approval) return reply.code(404).send({ error: "Запрос на подтверждение не найден" });
+    if (approval.status !== "pending") return reply.code(409).send({ error: "Запрос уже обработан" });
+    if (approval.expiresAt && approval.expiresAt.getTime() < Date.now()) {
+      await app.db.update(approvals).set({ status: "expired" }).where(eq(approvals.id, approvalId));
+      return reply.code(410).send({ error: "Срок подтверждения истёк — запросите действие заново" });
+    }
+    const decision = body.data.decision === "reject" ? "rejected" : "approved";
+    const [a] = await app.db.update(approvals).set({ status: decision, decidedBy: auth.userId, decidedAt: new Date() }).where(eq(approvals.id, approvalId)).returning();
+    app.audit(auth, { action: `approval.${decision}`, entity: "approval", entityId: approvalId, detail: { tool: approval.toolName, missionId: id } });
+    return a;
+  });
+};

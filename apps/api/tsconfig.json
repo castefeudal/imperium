@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "paths": {
+      "@imperium/*": [
+        "../../packages/*/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "../../packages/*/src/**/*.ts"
+  ]
+}
