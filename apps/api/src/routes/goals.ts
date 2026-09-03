@@ -33,7 +33,7 @@ export const registerGoalsRoutes: FastifyPluginAsync = async (app) => {
       const done = ts.filter((t) => t.status === "completed").length;
       return { ...g, projectCount: gs.length, taskCount: ts.length, taskDone: done, progress: ts.length ? Math.round((done / ts.length) * 100) : 0 };
     }));
-    return withProgress;
+    return { goals: withProgress };
   });
 
   app.post("/", async (request, reply) => {

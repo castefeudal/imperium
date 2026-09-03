@@ -114,6 +114,9 @@ importers:
       '@imperium/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@imperium/database':
+        specifier: workspace:*
+        version: link:../../packages/database
       ioredis:
         specifier: ^5.4.0
         version: 5.11.1
@@ -168,6 +171,9 @@ importers:
 
   packages/database:
     dependencies:
+      argon2:
+        specifier: ^0.45.1
+        version: 0.45.1
       drizzle-orm:
         specifier: ^0.44.0
         version: 0.44.7(postgres@3.4.9)
@@ -175,6 +181,9 @@ importers:
         specifier: ^3.4.0
         version: 3.4.9
     devDependencies:
+      '@types/argon2':
+        specifier: ^0.15.4
+        version: 0.15.4
       '@types/node':
         specifier: ^22
         version: 22.20.1

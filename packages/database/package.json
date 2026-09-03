@@ -11,10 +11,12 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "argon2": "^0.45.1",
     "drizzle-orm": "^0.44.0",
     "postgres": "^3.4.0"
   },
   "devDependencies": {
+    "@types/argon2": "^0.15.4",
     "@types/node": "^22",
     "drizzle-kit": "^0.31.0",
     "postgres": "^3.4.0",

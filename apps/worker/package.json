@@ -13,6 +13,7 @@
   "dependencies": {
     "@imperium/agents": "workspace:*",
     "@imperium/ai": "workspace:*",
+    "@imperium/database": "workspace:*",
     "ioredis": "^5.4.0"
   },
   "devDependencies": {
