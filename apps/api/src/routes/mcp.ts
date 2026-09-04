@@ -1,6 +1,7 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { FastifyInstance } from "fastify";
 import { ImperiumClient } from "@imperium/mcp/client.js";
+import { getAuth } from "../plugins/auth-helpers.js";
 import { buildImperiumMcpServer } from "@imperium/mcp/tools.js";
 
 /**
@@ -9,7 +10,7 @@ import { buildImperiumMcpServer } from "@imperium/mcp/tools.js";
  */
 export async function registerMcpRoutes(app: FastifyInstance): Promise<void> {
   app.post("/mcp", async (request, reply) => {
-    const auth = request.auth;
+    const auth = await getAuth(request, app.db);
     if (!auth || auth.authType !== "api_key") {
       return reply.code(401).send({
         jsonrpc: "2.0",

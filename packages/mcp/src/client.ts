@@ -96,11 +96,11 @@ export class ImperiumClient {
 
   captureInbox(args: { content: string; source?: string; idempotencyKey?: string }) {
     const { idempotencyKey, ...body } = args;
-    return this.request<Record<string, unknown>>("POST", "/api/v1/inbox", { ...body, kind: "note" }, idempotencyKey);
+    return this.request<Record<string, unknown>>("POST", "/api/v1/inbox", { title: body.content.slice(0, 500), body: body.content, channel: "agent", category: "fyi" }, idempotencyKey);
   }
 
   async getHealthSummary() {
-    return this.request<Record<string, unknown>>("GET", "/api/v1/health/summary");
+    return this.request<Record<string, unknown>>("GET", "/api/v1/health/overview");
   }
 
   async getContext() {
