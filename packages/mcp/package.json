@@ -1,0 +1,26 @@
+{
+  "name": "@imperium/mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start:stdio": "tsx src/stdio.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@imperium/ai": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./client.js": "./src/client.ts",
+    "./tools.js": "./src/tools.ts"
+  }
+}

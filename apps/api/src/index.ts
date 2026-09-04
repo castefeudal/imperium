@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { ModelRouter, type ProviderCredentials } from "@imperium/ai";
 import { registerGatewayRoutes } from "./routes/gateway.js";
+import { registerMcpRoutes } from "./routes/mcp.js";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
@@ -119,6 +120,7 @@ export async function buildApp(opts: { logger?: boolean } = {}) {
   await app.register(registerReviewsRoutes, { prefix: "/api/v1/reviews" });
   await app.register(registerApiKeysRoutes, { prefix: "/api/v1/api-keys" });
   await app.register(registerGatewayRoutes, { prefix: "/v1" });
+  await app.register(registerMcpRoutes);
 
   app.setErrorHandler((err: FastifyError, _req, reply) => {
     const status = err.statusCode ?? 500;

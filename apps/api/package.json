@@ -19,6 +19,8 @@
     "@imperium/ai": "workspace:*",
     "@imperium/database": "workspace:*",
     "@imperium/domain": "workspace:*",
+    "@imperium/mcp": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/argon2": "^0.15.4",
     "argon2": "^0.45.1",
     "drizzle-orm": "^0.44.7",
