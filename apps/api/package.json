@@ -25,6 +25,7 @@
     "argon2": "^0.45.1",
     "drizzle-orm": "^0.44.7",
     "fastify": "^5.0.0",
+    "ioredis": "^5.11.1",
     "fastify-plugin": "^5.0.0",
     "postgres": "^3.4.9",
     "zod": "^3.24.0"

@@ -4,6 +4,8 @@ import { missions, missionSteps, agentRuns, toolCalls, approvals, costLedger, pr
 import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { requireAuth, csrfOk } from "../plugins/auth-helpers.js";
+import { Redis } from "ioredis";
+import { randomUUID } from "node:crypto";
 import type { MissionStatus } from "@imperium/domain";
 import { canTransition } from "@imperium/domain";
 
@@ -101,6 +103,51 @@ export const registerMissionsRoutes: FastifyPluginAsync = async (app) => {
     const [m] = await app.db.update(missions).set(patch).where(eq(missions.id, id)).returning();
     app.audit(auth, { action: "mission.updated", entity: "mission", entityId: id, diff: { from: { status: current.status }, to: { status: status ?? current.status } } });
     return m;
+  });
+
+  app.post("/:id/run", async (request, reply) => {
+    const auth = await requireAuth(app, request, reply);
+    if (!auth) return;
+    if (auth.role === "viewer") return reply.code(403).send({ error: "Наблюдатель не может запускать миссии" });
+    if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });
+    const id = (request.params as { id: string }).id;
+    const current = (await app.db.select().from(missions).where(and(eq(missions.id, id), eq(missions.workspaceId, auth.workspaceId))).limit(1))[0];
+    if (!current) return reply.code(404).send({ error: "Миссия не найдена" });
+    if (!canTransition(current.status as MissionStatus, "queued")) {
+      return reply.code(409).send({ error: `Миссия в статусе ${current.status} не может быть поставлена в очередь` });
+    }
+    const [run] = await app.db.insert(agentRuns).values({
+      missionId: id,
+      workspaceId: auth.workspaceId,
+      status: "queued",
+      maxSteps: current.maxSteps,
+      idempotencyKey: `run:${randomUUID()}`,
+    }).returning();
+    if (!run) return reply.code(500).send({ error: "Не удалось создать запуск" });
+    // Если у миссии ещё нет шагов — создаём стартовый шаг из цели миссии,
+    // чтобы воркер всегда имел хотя бы одну единицу работы.
+    const existingSteps = await app.db.select({ id: missionSteps.id }).from(missionSteps).where(eq(missionSteps.missionId, id)).limit(1);
+    if (existingSteps.length === 0) {
+      await app.db.insert(missionSteps).values({
+        missionId: id,
+        title: current.title,
+        description: current.objective,
+        status: "ready",
+      });
+    }
+    const redis = new Redis(process.env.REDIS_URL ?? "redis://127.0.0.1:6379", { lazyConnect: false, maxRetriesPerRequest: 1 });
+    try {
+      await redis.lpush("imperium:missions:queue", run.id);
+    } catch (e) {
+      app.log.error({ err: e }, "не удалось поставить запуск в очередь");
+      await app.db.update(agentRuns).set({ status: "failed", error: "Очередь недоступна" }).where(eq(agentRuns.id, run.id));
+      return reply.code(503).send({ error: "Очередь задач недоступна, попробуйте позже" });
+    } finally {
+      redis.disconnect();
+    }
+    await app.db.update(missions).set({ status: "queued", startedAt: current.startedAt ?? new Date() }).where(eq(missions.id, id));
+    app.audit(auth, { action: "mission.queued", entity: "mission", entityId: id, detail: { runId: run.id } });
+    return reply.code(202).send({ runId: run.id, status: "queued" });
   });
 
   app.post("/:id/cancel", async (request, reply) => {

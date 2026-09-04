@@ -31,8 +31,21 @@ async function processRun(runId: string): Promise<void> {
   await db.update(agentRuns).set({ status: "running", startedAt: new Date() }).where(eq(agentRuns.id, runId));
   await db.update(missions).set({ status: "running" }).where(and(eq(missions.id, run.missionId), eq(missions.status, "draft")));
 
-  const steps = await db.select().from(missionSteps)
+  let steps = await db.select().from(missionSteps)
     .where(and(eq(missionSteps.missionId, run.missionId), inArray(missionSteps.status, ["pending", "ready"])));
+  if (steps.length === 0) {
+    const [mission] = await db.select().from(missions).where(eq(missions.id, run.missionId)).limit(1);
+    if (mission) {
+      await db.insert(missionSteps).values({
+        missionId: run.missionId,
+        title: "Выполнить цель миссии",
+        description: mission.objective,
+        status: "pending",
+      });
+      steps = await db.select().from(missionSteps)
+        .where(and(eq(missionSteps.missionId, run.missionId), inArray(missionSteps.status, ["pending", "ready"])));
+    }
+  }
   if (steps.length === 0) {
     await db.update(agentRuns).set({ status: "done", completedAt: new Date() }).where(eq(agentRuns.id, runId));
     await db.update(missions).set({ status: "reviewing" }).where(eq(missions.id, run.missionId));
