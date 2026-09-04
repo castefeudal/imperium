@@ -22,13 +22,22 @@ export function testProvider(opts: TestProviderOptions = {}) {
       const lastUser = [...req.messages].reverse().find((m) => m.role === "user");
       const content = replies[turn] ?? `Эхо: ${lastUser?.content.slice(0, 200) ?? ""}`;
       turn++;
+      // Deterministic tool-calling: когда объявлены tools и script не задан,
+      // возвращаем первый tool с аргументом из сообщения пользователя.
+      const scripted = turn === 1 ? opts.toolCalls : undefined;
+      let toolCalls: ToolCall[] = scripted ?? [];
+      if (toolCalls.length === 0 && turn === 1 && req.tools?.length && req.toolChoice !== "none") {
+        const first = req.tools[0]!;
+        toolCalls = [{ id: "call_test_1", name: first.name, args: { input: lastUser?.content ?? "" } }];
+      }
+      const finishReason = toolCalls.length > 0 ? ("tool_calls" as const) : ("stop" as const);
       return {
-        content,
-        toolCalls: turn === 1 ? (opts.toolCalls ?? []) : [],
-        finishReason: "stop",
+        content: toolCalls.length > 0 ? null : content,
+        toolCalls,
+        finishReason,
         usage: {
           inputTokens: opts.inputTokens ?? Math.ceil(req.messages.reduce((s, m) => s + m.content.length, 0) / 3.5),
-          outputTokens: opts.outputTokens ?? Math.ceil(content.length / 3.5),
+          outputTokens: opts.outputTokens ?? Math.ceil((content.length || 8) / 3.5),
           estimatedCostUsd: 0,
         },
         provider: "test",

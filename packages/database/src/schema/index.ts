@@ -842,6 +842,7 @@ export const reviews = pgTable("reviews", {
 export const apiKeys = pgTable("api_keys", {
   id: uuid("id").defaultRandom().primaryKey(),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   scopes: jsonb("scopes").$type<string[]>().notNull().default(sql`'[]'::jsonb`), // read:tasks write:tasks read:projects create:missions read:knowledge ...
   keyHash: text("key_hash").notNull(),

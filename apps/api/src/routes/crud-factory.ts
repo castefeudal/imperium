@@ -3,7 +3,7 @@ import { and, desc, eq, isNull, SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { PgTable, PgColumn } from "drizzle-orm/pg-core";
 import { getTableColumns } from "drizzle-orm";
-import { csrfOk, requireAuth } from "../plugins/auth-helpers.js";
+import { csrfOk, requireAuth, requireScope } from "../plugins/auth-helpers.js";
 
 export interface CrudConfig {
   table: PgTable;
@@ -25,6 +25,7 @@ export function crudRoutes(cfg: CrudConfig): FastifyPluginAsync {
     app.get("/", async (request, reply) => {
       const auth = await requireAuth(app, request, reply);
       if (!auth) return;
+      if (!requireScope(auth, "read", reply)) return;
       const conditions: SQL[] = [eq(cfg.workspaceColumn, auth.workspaceId)];
       if (cfg.softDeleteColumn) conditions.push(isNull(cfg.softDeleteColumn) as SQL);
       const { status } = request.query as { status?: string };
@@ -39,6 +40,7 @@ export function crudRoutes(cfg: CrudConfig): FastifyPluginAsync {
     app.post("/", async (request, reply) => {
       const auth = await requireAuth(app, request, reply);
       if (!auth) return;
+      if (!requireScope(auth, "write", reply)) return;
       if (auth.role === "viewer") return reply.code(403).send({ error: "Наблюдатель не может создавать записи" });
       if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });
       const parsed = cfg.createSchema.safeParse(request.body);
@@ -50,6 +52,7 @@ export function crudRoutes(cfg: CrudConfig): FastifyPluginAsync {
     app.get("/:id", async (request, reply) => {
       const auth = await requireAuth(app, request, reply);
       if (!auth) return;
+      if (!requireScope(auth, "read", reply)) return;
       const rows = await app.db.select().from(cfg.table)
         .where(and(eq(cfg.idColumn, (request.params as { id: string }).id), eq(cfg.workspaceColumn, auth.workspaceId)))
         .limit(1);
@@ -60,6 +63,7 @@ export function crudRoutes(cfg: CrudConfig): FastifyPluginAsync {
     app.patch("/:id", async (request, reply) => {
       const auth = await requireAuth(app, request, reply);
       if (!auth) return;
+      if (!requireScope(auth, "write", reply)) return;
       if (auth.role === "viewer") return reply.code(403).send({ error: "Наблюдатель не может изменять записи" });
       if (!csrfOk(request, auth)) return reply.code(403).send({ error: "Недействительный CSRF-токен" });
       const parsed = cfg.updateSchema.safeParse(request.body);

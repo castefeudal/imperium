@@ -1,4 +1,6 @@
 import Fastify from "fastify";
+import { ModelRouter, type ProviderCredentials } from "@imperium/ai";
+import { registerGatewayRoutes } from "./routes/gateway.js";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
@@ -27,11 +29,13 @@ import { registerSearchRoutes } from "./routes/search.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerPeopleRoutes } from "./routes/people.js";
 import { registerReviewsRoutes } from "./routes/reviews.js";
+import { registerApiKeysRoutes } from "./routes/api-keys.js";
 import type { FastifyError } from "fastify";
 
 declare module "fastify" {
   interface FastifyInstance {
     db: ReturnType<typeof getDb>;
+    modelRouter: import("@imperium/ai").ModelRouter;
     requireAuth(request: import("fastify").FastifyRequest, reply: import("fastify").FastifyReply): Promise<import("./plugins/auth-helpers.js").AuthContext | null>;
   }
   interface FastifyRequest {
@@ -57,6 +61,27 @@ export async function buildApp(opts: { logger?: boolean } = {}) {
   app.db = getDb();
 
   registerAudit(app);
+
+  // Model router: реальные провайдеры из env, test-provider только для dev/test.
+  const gatewayCredentials: ProviderCredentials[] = [];
+  const addCred = (id: string, kind: ProviderCredentials["kind"], envKey?: string, baseUrl?: string) => {
+    if (kind === "test") {
+      if (process.env.NODE_ENV !== "production") gatewayCredentials.push({ id, kind, label: "Deterministic test provider" });
+      return;
+    }
+    const apiKey = envKey ? process.env[envKey] : undefined;
+    if (apiKey || (kind === "openai-compatible" && !envKey)) {
+      gatewayCredentials.push({ id, kind, label: id, apiKey, baseUrl });
+    }
+  };
+  addCred("openai", "openai-compatible", "OPENAI_API_KEY", "https://api.openai.com/v1");
+  addCred("openrouter", "openai-compatible", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1");
+  addCred("ollama", "openai-compatible", undefined, process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434/v1");
+  addCred("anthropic", "anthropic", "ANTHROPIC_API_KEY");
+  addCred("google", "google", "GOOGLE_AI_API_KEY");
+  addCred("test", "test");
+  const modelRouter = new ModelRouter({ credentials: gatewayCredentials });
+  app.modelRouter = modelRouter;
 
   app.requireAuth = ((request: import("fastify").FastifyRequest, reply: import("fastify").FastifyReply) =>
     requireAuth(app, request, reply)) as typeof app.requireAuth;
@@ -92,6 +117,8 @@ export async function buildApp(opts: { logger?: boolean } = {}) {
   await app.register(registerSettingsRoutes, { prefix: "/api/v1/settings" });
   await app.register(registerPeopleRoutes, { prefix: "/api/v1/people" });
   await app.register(registerReviewsRoutes, { prefix: "/api/v1/reviews" });
+  await app.register(registerApiKeysRoutes, { prefix: "/api/v1/api-keys" });
+  await app.register(registerGatewayRoutes, { prefix: "/v1" });
 
   app.setErrorHandler((err: FastifyError, _req, reply) => {
     const status = err.statusCode ?? 500;
