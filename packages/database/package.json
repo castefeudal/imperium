@@ -8,7 +8,7 @@
     "reset": "tsx src/reset.ts",
     "test:integration": "vitest run --config vitest.integration.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --config vitest.integration.ts"
   },
   "dependencies": {
     "argon2": "^0.45.1",
