@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
+import { items, useLoadable } from "../lib/use-loadable";
 import { api } from "../lib/api";
 
 interface Task {
@@ -16,21 +17,15 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export default function TasksPage() {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const { data: tasks, error: loadError, reload } = useLoadable<Task[]>(
+    "/tasks",
+    [],
+    (res) => items<Task>(res),
+  );
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState("medium");
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
-    try {
-      const res = await api.get<Task[] | { items: Task[] }>("/tasks");
-      setTasks(Array.isArray(res) ? res : res.items ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка загрузки");
-    }
-  }
-
-  useEffect(() => { void load(); }, []);
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -38,7 +33,7 @@ export default function TasksPage() {
     try {
       await api.post("/tasks", { title: title.trim(), priority });
       setTitle("");
-      await load();
+      await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка создания");
     }
@@ -47,7 +42,7 @@ export default function TasksPage() {
   async function complete(t: Task) {
     try {
       await api.patch(`/tasks/${t.id}`, { status: "done" });
-      await load();
+      await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка обновления");
     }
@@ -73,7 +68,7 @@ export default function TasksPage() {
         </select>
         <button type="submit" style={{ padding: 10, borderRadius: 8, border: "none", background: "#238636", color: "#fff", cursor: "pointer" }}>Добавить</button>
       </form>
-      {error && <p style={{ color: "#f85149" }}>{error}</p>}
+      {(loadError || error) && <p style={{ color: "#f85149" }}>{loadError ?? error}</p>}
       <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
         {tasks.filter((t) => t.status !== "done").map((t) => (
           <li key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderRadius: 8, background: "#161b22", border: "1px solid #30363d" }}>

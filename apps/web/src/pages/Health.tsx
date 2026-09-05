@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
+import { items, useLoadable } from "../lib/use-loadable";
 import { api } from "../lib/api";
 
 interface SleepEntry {
@@ -10,27 +11,21 @@ interface SleepEntry {
 }
 
 export default function HealthPage() {
-  const [entries, setEntries] = useState<SleepEntry[]>([]);
+  const { data: entries, error: loadError, reload } = useLoadable<SleepEntry[]>(
+    "/health/sleep",
+    [],
+    (res) => items<SleepEntry>(res),
+  );
   const [quality, setQuality] = useState("4");
   const [hours, setHours] = useState("7.5");
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
-    try {
-      const res = await api.get<SleepEntry[] | { items: SleepEntry[] }>("/health/sleep");
-      setEntries(Array.isArray(res) ? res : res.items ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка загрузки");
-    }
-  }
-
-  useEffect(() => { void load(); }, []);
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
     try {
       await api.post("/health/sleep", { durationMin: Math.round(Number(hours) * 60), quality: Number(quality) });
-      await load();
+      await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка сохранения");
     }
@@ -63,7 +58,7 @@ export default function HealthPage() {
         </label>
         <button type="submit" style={{ padding: 10, borderRadius: 8, border: "none", background: "#238636", color: "#fff", cursor: "pointer", alignSelf: "end" }}>Записать</button>
       </form>
-      {error && <p style={{ color: "#f85149" }}>{error}</p>}
+      {(loadError || error) && <p style={{ color: "#f85149" }}>{loadError ?? error}</p>}
       <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
         {entries.slice(0, 14).map((e) => (
           <li key={e.id} style={{ padding: "10px 16px", borderRadius: 8, background: "#161b22", border: "1px solid #30363d", display: "flex", justifyContent: "space-between" }}>

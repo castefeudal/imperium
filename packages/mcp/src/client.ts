@@ -82,8 +82,8 @@ export class ImperiumClient {
   }
 
   createMission(args: { title: string; goal: string; allowedTools?: string[]; idempotencyKey?: string }) {
-    const { idempotencyKey, ...body } = args;
-    return this.request<Record<string, unknown>>("POST", "/api/v1/missions", { ...body, prompt: args.goal }, idempotencyKey);
+    const { idempotencyKey, goal, ...body } = args;
+    return this.request<Record<string, unknown>>("POST", "/api/v1/missions", { ...body, prompt: goal }, idempotencyKey);
   }
 
   runMission(id: string) {

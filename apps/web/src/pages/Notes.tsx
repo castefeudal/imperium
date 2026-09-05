@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { api } from "../lib/api";
+import { items, useLoadable } from "../lib/use-loadable";
 
 interface Note {
   id: string;
@@ -10,21 +11,10 @@ interface Note {
 }
 
 export default function NotesPage() {
-  const [notes, setNotes] = useState<Note[]>([]);
+  const { data: notes, error, reload } = useLoadable<Note[]>("/notes", [], (res) => items<Note>(res));
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  async function load() {
-    try {
-      const res = await api.get<Note[] | { items: Note[] }>("/notes");
-      setNotes(Array.isArray(res) ? res : res.items ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка загрузки");
-    }
-  }
-
-  useEffect(() => { void load(); }, []);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -32,18 +22,18 @@ export default function NotesPage() {
     try {
       await api.post("/notes", { title: title.trim(), body: body.trim() || undefined });
       setTitle(""); setBody("");
-      await load();
+      await reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка создания");
+      setActionError(err instanceof Error ? err.message : "Ошибка создания");
     }
   }
 
   async function remove(id: string) {
     try {
       await api.del(`/notes/${id}`);
-      await load();
+      await reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка удаления");
+      setActionError(err instanceof Error ? err.message : "Ошибка удаления");
     }
   }
 
@@ -62,7 +52,7 @@ export default function NotesPage() {
           style={{ padding: 10, borderRadius: 8, border: "1px solid #30363d", background: "#161b22", color: "#e6edf3", resize: "vertical" }} />
         <button type="submit" style={{ padding: 10, borderRadius: 8, border: "none", background: "#238636", color: "#fff", cursor: "pointer", justifySelf: "start" }}>Сохранить</button>
       </form>
-      {error && <p style={{ color: "#f85149" }}>{error}</p>}
+      {(error || actionError) && <p style={{ color: "#f85149" }}>{error ?? actionError}</p>}
       <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
         {notes.map((n) => (
           <li key={n.id} style={{ padding: "12px 16px", borderRadius: 8, background: "#161b22", border: "1px solid #30363d" }}>
