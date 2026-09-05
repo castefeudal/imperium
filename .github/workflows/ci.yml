@@ -46,6 +46,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Create test database
         run: psql postgresql://postgres:postgres@127.0.0.1:5432/postgres -c "CREATE DATABASE imperium_int_test"
+        psql postgresql://postgres:postgres@127.0.0.1:5432/imperium_int_test -c "CREATE EXTENSION IF NOT EXISTS vector"
       - name: Typecheck
         run: pnpm typecheck
       - name: Lint
