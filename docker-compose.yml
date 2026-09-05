@@ -1,0 +1,79 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: imperium
+      POSTGRES_PASSWORD: imperium_dev
+      POSTGRES_DB: imperium
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U imperium -d imperium"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: .
+    image: ghcr.io/castefeudal/imperium-api:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://imperium:imperium_dev@postgres:5432/imperium
+      DATABASE_URL_ADMIN: postgresql://imperium:imperium_dev@postgres:5432/postgres
+      REDIS_URL: redis://redis:6379
+      PORT: "3100"
+      CORS_ORIGIN: http://localhost:3000
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    build: .
+    image: ghcr.io/castefeudal/imperium-api:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://imperium:imperium_dev@postgres:5432/postgres
+      REDIS_URL: redis://redis:6379
+    command: ["worker"]
+
+  web:
+    build: ./apps/web
+    image: ghcr.io/castefeudal/imperium-web:latest
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      VITE_API_URL: http://localhost:3100
+    ports:
+      - "3000:80"
+
+volumes:
+  pgdata:
