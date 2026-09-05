@@ -11,7 +11,7 @@ export const registerNotesRoutes: FastifyPluginAsync = async (app) => {
     softDeleteColumn: undefined,
     orderBy: notes.createdAt,
     entityName: "Заметка",
-    createSchema: z.object({ title: z.string().min(1).max(400), body: z.string().max(500000).optional(), tags: z.array(z.string().max(50)).max(20).optional() }),
+    createSchema: z.object({ title: z.string().min(1).max(400), body: z.string().max(500000).default(""), tags: z.array(z.string().max(50)).max(20).optional() }),
     updateSchema: z.object({ title: z.string().min(1).max(400), body: z.string().max(500000).optional(), tags: z.array(z.string().max(50)).max(20).optional() }).partial(),
   }));
 };
