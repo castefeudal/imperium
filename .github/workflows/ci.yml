@@ -50,6 +50,8 @@ jobs:
         run: pnpm typecheck
       - name: Lint
         run: pnpm lint
+      - name: Migrate test database
+        run: pnpm --filter @imperium/database migrate
       - name: Tests (unit + integration)
         run: pnpm -r test
       - name: Build web
