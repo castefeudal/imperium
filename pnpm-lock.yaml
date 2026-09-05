@@ -126,9 +126,15 @@ importers:
       '@imperium/database':
         specifier: workspace:*
         version: link:../../packages/database
+      drizzle-orm:
+        specifier: ^0.44.2
+        version: 0.44.7(postgres@3.4.9)
       ioredis:
         specifier: ^5.4.0
         version: 5.11.1
+      postgres:
+        specifier: ^3.4.7
+        version: 3.4.9
     devDependencies:
       '@types/node':
         specifier: ^22
