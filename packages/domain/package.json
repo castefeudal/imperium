@@ -6,6 +6,9 @@
   "exports": { ".": "./src/index.ts" },
   "scripts": {
     "test": "vitest run",
-    "build": "tsc"
+    "build": "tsc",
+  "devDependencies": {
+    "vitest": "^2.1.9"
+  }
   }
 }
