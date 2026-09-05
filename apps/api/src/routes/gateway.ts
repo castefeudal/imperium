@@ -34,7 +34,19 @@ function toInternalMessages(messages: unknown): ChatMessage[] {
       ? content.map((c) => (typeof c === "object" && c && "text" in c ? String((c as { text: string }).text) : "")).join("")
       : "";
     if (role === "system" || role === "user" || role === "assistant") {
-      out.push({ role, content: text });
+      const toolCalls = role === "assistant" && Array.isArray((m as { tool_calls?: unknown }).tool_calls)
+        ? ((m as { tool_calls: Array<{ id?: string; function?: { name?: string; arguments?: string } }> }).tool_calls
+            .filter((tc) => tc && typeof tc === "object" && typeof tc.function?.name === "string")
+            .map((tc) => ({
+              id: typeof tc.id === "string" && tc.id.length > 0 ? tc.id : `call_${crypto.randomUUID()}`,
+              name: tc.function!.name!,
+              args: (() => { try { return JSON.parse(typeof tc.function?.arguments === "string" ? tc.function.arguments : "{}"); } catch { return {}; } })(),
+            })))
+        : undefined;
+      out.push({ role, content: text, ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}) });
+    } else if (role === "tool") {
+      const toolCallId = (m as { tool_call_id?: string }).tool_call_id;
+      out.push({ role: "tool", content: text, ...(typeof toolCallId === "string" && toolCallId.length > 0 ? { toolCallId } : {}) });
     }
   }
   return out;

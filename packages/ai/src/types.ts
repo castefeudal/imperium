@@ -25,6 +25,15 @@ export const chatMessageSchema = z.object({
   content: z.string(),
   name: z.string().optional(),
   toolCallId: z.string().optional(),
+  toolCalls: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        args: z.unknown().optional(),
+      }),
+    )
+    .optional(),
 });
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 

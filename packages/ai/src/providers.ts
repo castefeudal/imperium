@@ -74,7 +74,17 @@ export function openAiCompatibleAdapter(): ProviderAdapter {
       const baseUrl = (creds.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
       const body: Record<string, unknown> = {
         model: req.model ?? "gpt-4o-mini",
-        messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
+        messages: req.messages.map((m) => {
+          if (m.role === "tool") return { role: "tool", content: m.content, tool_call_id: m.toolCallId ?? m.toolCalls?.[0]?.id ?? "unknown" };
+          if (m.role === "assistant" && m.toolCalls?.length) {
+            return {
+              role: "assistant",
+              content: m.content || null,
+              tool_calls: m.toolCalls.map((tc) => ({ id: tc.id, type: "function", function: { name: tc.name, arguments: JSON.stringify(tc.args ?? {}) } })),
+            };
+          }
+          return { role: m.role, content: m.content };
+        }),
         temperature: req.temperature,
         max_tokens: req.maxTokens,
       };

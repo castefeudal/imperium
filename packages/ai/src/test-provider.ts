@@ -20,24 +20,28 @@ export function testProvider(opts: TestProviderOptions = {}) {
     kind: "test" as const,
     async chat(_creds: unknown, req: ChatRequest): Promise<ChatResponse> {
       const lastUser = [...req.messages].reverse().find((m) => m.role === "user");
-      const content = replies[turn] ?? `Эхо: ${lastUser?.content.slice(0, 200) ?? ""}`;
+      const rawContent = replies[turn] ?? `Эхо: ${lastUser?.content.slice(0, 200) ?? ""}`;
       turn++;
+      const lastMessage: ChatMessage | undefined = req.messages.at(-1);
       // Deterministic tool-calling: когда объявлены tools и script не задан,
-      // возвращаем первый tool с аргументом из сообщения пользователя.
+      // возвращаем первый tool, пока последний ход — не результат инструмента.
       const scripted = turn === 1 ? opts.toolCalls : undefined;
       let toolCalls: ToolCall[] = scripted ?? [];
-      if (toolCalls.length === 0 && turn === 1 && req.tools?.length && req.toolChoice !== "none") {
+      if (toolCalls.length === 0 && lastMessage?.role !== "tool" && req.tools?.length && req.toolChoice !== "none") {
         const first = req.tools[0]!;
         toolCalls = [{ id: "call_test_1", name: first.name, args: { input: lastUser?.content ?? "" } }];
       }
+      // JSON mode: валидный JSON-объект в content.
+      const content = req.responseFormatJson && toolCalls.length === 0 ? JSON.stringify({ reply: rawContent }) : rawContent;
+      const replyContent = toolCalls.length > 0 ? null : content;
       const finishReason = toolCalls.length > 0 ? ("tool_calls" as const) : ("stop" as const);
       return {
-        content: toolCalls.length > 0 ? null : content,
+        content: replyContent,
         toolCalls,
         finishReason,
         usage: {
           inputTokens: opts.inputTokens ?? Math.ceil(req.messages.reduce((s, m) => s + m.content.length, 0) / 3.5),
-          outputTokens: opts.outputTokens ?? Math.ceil((content.length || 8) / 3.5),
+          outputTokens: opts.outputTokens ?? Math.ceil((rawContent.length || 8) / 3.5),
           estimatedCostUsd: 0,
         },
         provider: "test",
